@@ -1,59 +1,55 @@
-// screens/HomeScreen.js
-import React, { useState, useEffect } from 'react';
-import { View, Text, Button, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
-import { firestore, auth } from '../compoents/firebase';
+import React from 'react';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import AddPostScreen from '../compoents/screens/AddPostScreen';
+import MessagesScreen from '../compoents/screens/MessagesScreen';
+import ProfileScreen from '../compoents/screens/ProfileScreen';
+import { Ionicons } from '@expo/vector-icons';
+import { View, Text, StyleSheet } from 'react-native';
 
-const HomeScreen = ({ navigation }) => {
-  const [tasks, setTasks] = useState([]);
-  const user = auth.currentUser;
-
-  useEffect(() => {
-    if (user) {
-      const unsubscribe = firestore
-        .collection('tasks')
-        .where('userId', '==', user.uid)
-        .onSnapshot(querySnapshot => {
-          const tasks = querySnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-          setTasks(tasks);
-        });
-      return unsubscribe;
-    }
-  }, [user]);
-
-  const handleTaskPress = async (id) => {
-    try {
-      await firestore.collection('tasks').doc(id).update({ status: 'done' });
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const handleSignOut = () => {
-    auth.signOut().then(() => {
-      navigation.navigate('Auth');
-    });
-  };
-
+// Simple Home Page Content inside the HomeScreen itself
+const HomeContent = () => {
   return (
     <View style={styles.container}>
-      <FlatList
-        data={tasks}
-        keyExtractor={(item) => item.id.toString()}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={[styles.task, { backgroundColor: item.status === 'done' ? 'green' : 'red' }]}
-            onPress={() => handleTaskPress(item.id)}
-          >
-            <Text style={styles.taskText}>{item.title}</Text>
-          </TouchableOpacity>
-        )}
-      />
-      <Button title="Add Task" onPress={() => navigation.navigate('Task')} />
-      <Button title="Sign Out" onPress={handleSignOut} />
+      <Text>Welcome to the Home Page!</Text>
     </View>
+  );
+};
+
+const Tab = createBottomTabNavigator();
+
+const HomeScreen = () => {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        tabBarIcon: ({ color, size }) => {
+          let iconName;
+          if (route.name === 'Home') {
+            iconName = 'home';
+          } else if (route.name === 'Add Post') {
+            iconName = 'add-circle';
+          } else if (route.name === 'Messages') {
+            iconName = 'chatbubbles';
+          } else if (route.name === 'Profile') {
+            iconName = 'person';
+          }
+
+          return <Ionicons name={iconName} size={size} color={color} />;
+        },
+        tabBarActiveTintColor: '#0288D1',
+        tabBarInactiveTintColor: 'gray',
+        tabBarStyle: {
+          backgroundColor: '#fff',
+          paddingBottom: 5,
+          paddingTop: 5,
+          height: 60,
+        },
+      })}
+    >
+      <Tab.Screen name="Home" component={HomeContent} />
+      <Tab.Screen name="Add Post" component={AddPostScreen} />
+      <Tab.Screen name="Messages" component={MessagesScreen} />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
+    </Tab.Navigator>
   );
 };
 
@@ -62,17 +58,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  task: {
-    padding: 15,
-    marginVertical: 10,
-    width: '90%',
-    borderRadius: 5,
-  },
-  taskText: {
-    color: '#fff',
-    fontSize: 18,
   },
 });
 
