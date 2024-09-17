@@ -3,12 +3,12 @@ import { View, StyleSheet } from 'react-native';
 import { Input, Button, Text } from 'react-native-elements';
 import { auth } from '../compoents/firebase';
 
-const AuthScreen = ({ navigation }) => {
+const SignUpScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleSignIn = () => {
-    auth.signInWithEmailAndPassword(email, password)
+  const handleSignUp = () => {
+    auth.createUserWithEmailAndPassword(email, password)
       .then(userCredential => {
         navigation.navigate('Home');
       })
@@ -17,7 +17,7 @@ const AuthScreen = ({ navigation }) => {
 
   return (
     <View style={styles.container}>
-      <Text h3 style={styles.title}>Sign In</Text>
+      <Text h3 style={styles.title}>Sign Up</Text>
       
       <Input
         placeholder="Email"
@@ -36,16 +36,16 @@ const AuthScreen = ({ navigation }) => {
       />
 
       <Button
-        title="Sign In"
-        onPress={handleSignIn}
+        title="Create Account"
+        onPress={handleSignUp}
         buttonStyle={styles.button}
       />
 
       <Button
-        title="Don't have an account? Sign Up"
+        title="Already have an account? Sign In"
         type="clear"
-        onPress={() => navigation.navigate('SignUp')}
-        titleStyle={styles.signUpButton}
+        onPress={() => navigation.navigate('Auth')}
+        titleStyle={styles.signInButton}
       />
     </View>
   );
@@ -69,10 +69,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#0288D1',
     marginTop: 10,
   },
-  signUpButton: {
+  signInButton: {
     color: '#0288D1',
     marginTop: 20,
   },
 });
 
-export default AuthScreen;
+export default SignUpScreen;
