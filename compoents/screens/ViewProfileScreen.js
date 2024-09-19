@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
-import { firestore } from '../firebase';
+import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity } from 'react-native';
+import { firestore, auth } from '../firebase';
 import { Button } from 'react-native-elements';
 
 const preAddedPictures = [
@@ -18,6 +18,7 @@ const ViewProfileScreen = ({ navigation, route }) => {
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showPictureOptions, setShowPictureOptions] = useState(false);
+  const currentUserId = auth.currentUser?.uid;
 
   // Fetch the viewed user's profile data from Firestore
   useEffect(() => {
@@ -47,12 +48,47 @@ const ViewProfileScreen = ({ navigation, route }) => {
     fetchProfileData();
   }, [userId]);
 
-  // Function to navigate to the chat screen to message the user
+  // Function to either create a new chat or navigate to an existing chat
   const handleMessage = async () => {
     try {
-      navigation.navigate('Chat', { selectedUserId: userId });
+      // Check if a chat already exists with exactly these two participants
+      const chatQuery = await firestore
+        .collection('chats')
+        .where('participants', 'array-contains', currentUserId)
+        .get();
+
+      let chatId;
+      let chatFound = false;
+
+      // Check if the chat also contains the selected user
+      chatQuery.forEach((doc) => {
+        const participants = doc.data().participants;
+        if (participants.includes(userId) && participants.includes(currentUserId)) {
+          chatId = doc.id;
+          chatFound = true;
+        }
+      });
+
+      // If no chat is found, create a new one
+      if (!chatFound) {
+        const newChatRef = await firestore.collection('chats').add({
+          participants: [currentUserId, userId],
+          createdAt: new Date(),
+        });
+        chatId = newChatRef.id;
+      }
+
+      // Update the chat's lastOpened time for the current user
+      await firestore.collection('users').doc(currentUserId)
+        .collection('chatData')
+        .doc(chatId)
+        .set({ lastOpened: new Date() }, { merge: true });
+
+      // Navigate to the chat screen
+      navigation.navigate('Chat', { chatId, selectedUserId: userId });
+
     } catch (error) {
-      console.error('Error navigating to chat:', error);
+      console.error('Error creating or navigating to chat:', error);
     }
   };
 
@@ -87,7 +123,6 @@ const ViewProfileScreen = ({ navigation, route }) => {
         )}
       </View>
 
- 
       <View style={styles.quoteSection}>
         <Text style={styles.quote}>{quote || 'No quote available'}</Text>
       </View>
@@ -120,7 +155,7 @@ const styles = StyleSheet.create({
   },
   profileSection: {
     alignItems: 'center',
-    marginBottom: 10,  // Decreased margin
+    marginBottom: 10,
   },
   profilePic: {
     width: 100,

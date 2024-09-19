@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, FlatList, TouchableOpacity } from 'react-native';
 import { firestore, auth } from '../firebase';
 import { Button } from 'react-native-elements';
+import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
 
 const MessagesScreen = ({ navigation }) => {
   const [searchText, setSearchText] = useState('');
@@ -10,44 +11,50 @@ const MessagesScreen = ({ navigation }) => {
   const [chats, setChats] = useState([]);
   const currentUserId = auth.currentUser?.uid;
   const [usersMap, setUsersMap] = useState({});
+  const [limit, setLimit] = useState(20); // Add limit to avoid fetching too many users/chats
 
-  // Fetch all users and create a map of userId -> username for faster lookup
+  // Enable Firestore offline persistence
   useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const usersCollection = await firestore.collection('users').get();
-        const usersList = usersCollection.docs.map(doc => ({
+    firestore.enablePersistence().catch(err => {
+      console.error('Failed to enable Firestore persistence:', err);
+    });
+  }, []);
+
+  // Fetch all users with a limit
+  const fetchUsers = async () => {
+    try {
+      const usersCollection = await firestore.collection('users').limit(limit).get();
+      const usersList = usersCollection.docs
+        .filter(doc => doc.id !== currentUserId) // Filter out the current user from the list
+        .map(doc => ({
           id: doc.id,
           ...doc.data(),
         }));
-        const userMap = usersList.reduce((acc, user) => {
-          acc[user.id] = user.username; // Map userId to username
-          return acc;
-        }, {});
-        setUsers(usersList);
-        setUsersMap(userMap); // Save the map for faster username lookup
-      } catch (error) {
-        console.error('Error fetching users:', error);
-      }
-    };
+      const userMap = usersList.reduce((acc, user) => {
+        acc[user.id] = user.username; // Map userId to username
+        return acc;
+      }, {});
+      setUsers(usersList);
+      setUsersMap(userMap); // Save the map for faster username lookup
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    }
+  };
 
-    fetchUsers();
-  }, []);
+  // Fetch ongoing chats for the current user with a limit
+  const fetchChats = async () => {
+    try {
+      const snapshot = await firestore
+        .collection('chats')
+        .where('participants', 'array-contains', currentUserId)
+        .limit(limit)
+        .get();
 
-  // Fetch ongoing chats (conversations) for the current user
-  useEffect(() => {
-    const fetchChats = async () => {
-      try {
-        const chatsCollection = await firestore
-          .collection('chats')
-          .where('participants', 'array-contains', currentUserId)
-          .get();
-        
-        // Map through the chat documents and get chat information
-        const chatsList = await Promise.all(chatsCollection.docs.map(async (doc) => {
+      const chatsList = await Promise.all(
+        snapshot.docs.map(async (doc) => {
           const chatData = doc.data();
-          const otherParticipantId = chatData.participants.find(id => id !== currentUserId);  // Get the other participant
-          const otherParticipantUsername = usersMap[otherParticipantId] || 'Unknown User';  // Use the userMap for fast lookup
+          const otherParticipantId = chatData.participants.find(id => id !== currentUserId); // Get the other participant
+          const otherParticipantUsername = usersMap[otherParticipantId] || 'Unknown User'; // Use the userMap for fast lookup
 
           // Get the last message timestamp
           const lastMessageSnapshot = await firestore.collection('chats').doc(doc.id)
@@ -55,7 +62,7 @@ const MessagesScreen = ({ navigation }) => {
             .orderBy('createdAt', 'desc')
             .limit(1)
             .get();
-          
+
           const lastMessage = lastMessageSnapshot.docs[0]?.data();
           const lastMessageTime = lastMessage?.createdAt?.toDate();
 
@@ -73,21 +80,32 @@ const MessagesScreen = ({ navigation }) => {
           return {
             id: doc.id,
             ...chatData,
-            otherParticipantUsername,  // Include the other participant's username
-            hasNewMessages,  // Add flag for new messages
+            otherParticipantUsername, // Include the other participant's username
+            hasNewMessages, // Add flag for new messages
+            lastMessageTime, // Include last message time for sorting
           };
-        }));
+        })
+      );
 
-        setChats(chatsList);
-      } catch (error) {
-        console.error('Error fetching chats:', error);
-      }
-    };
-
-    if (Object.keys(usersMap).length > 0) {
-      fetchChats(); // Only fetch chats when usersMap is ready
+      // Sort chats by latest message time, newest at the top
+      const sortedChats = chatsList.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+      setChats(sortedChats);
+    } catch (error) {
+      console.error('Error fetching chats:', error);
     }
-  }, [currentUserId, usersMap]);
+  };
+
+  // UseFocusEffect to refresh the chats and users when the screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      const fetchData = async () => {
+        await fetchUsers();
+        await fetchChats();
+      };
+      
+      fetchData();
+    }, [currentUserId, usersMap])
+  );
 
   // Filter users based on search input
   useEffect(() => {
@@ -109,10 +127,10 @@ const MessagesScreen = ({ navigation }) => {
         .collection('chats')
         .where('participants', 'array-contains', currentUserId) // Find chats where currentUserId is a participant
         .get();
-  
+
       let chatId;
       let chatFound = false;
-  
+
       // Check if the chat also contains the selected user
       chatQuery.forEach((doc) => {
         const participants = doc.data().participants;
@@ -121,7 +139,7 @@ const MessagesScreen = ({ navigation }) => {
           chatFound = true;
         }
       });
-  
+
       // If no chat is found, create a new one
       if (!chatFound) {
         const newChatRef = await firestore.collection('chats').add({
@@ -130,16 +148,16 @@ const MessagesScreen = ({ navigation }) => {
         });
         chatId = newChatRef.id;
       }
-  
+
       // Update the chat's lastOpened time for the current user
       await firestore.collection('users').doc(currentUserId)
         .collection('chatData')
         .doc(chatId)
         .set({ lastOpened: new Date() }, { merge: true });
-  
+
       // Navigate to the chat screen
       navigation.navigate('Chat', { chatId, selectedUserId });
-  
+
     } catch (error) {
       console.error('Error creating or navigating to chat:', error);
     }
@@ -185,29 +203,31 @@ const MessagesScreen = ({ navigation }) => {
         />
       )}
 
-      {/* Ongoing Chats Section */}
-      <View style={styles.chatsContainer}>
-        <Text style={styles.label}>Your Chats</Text>
-        {chats.length > 0 ? (
-          <FlatList
-            data={chats}
-            keyExtractor={item => item.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                onPress={() => handleMessage(item.participants.find(id => id !== currentUserId))} // Navigate to chat with selected user
-                style={styles.chatItem}
-              >
-                <View style={styles.chatRow}>
-                  <Text style={styles.chatTitle}>{item.otherParticipantUsername}</Text>
-                  {item.hasNewMessages && <View style={styles.redDot} />}  
-                </View>
-              </TouchableOpacity>
-            )}
-          />
-        ) : (
-          <Text>No ongoing chats yet.</Text>
-        )}
-      </View>
+      {/* Ongoing Chats Section (hidden when searching) */}
+      {searchText.length === 0 && (
+        <View style={styles.chatsContainer}>
+          <Text style={styles.label}>Your Chats</Text>
+          {chats.length > 0 ? (
+            <FlatList
+              data={chats}
+              keyExtractor={item => item.id}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  onPress={() => handleMessage(item.participants.find(id => id !== currentUserId))} // Navigate to chat with selected user
+                  style={styles.chatItem}
+                >
+                  <View style={styles.chatRow}>
+                    <Text style={styles.chatTitle}>{item.otherParticipantUsername}</Text>
+                    {item.hasNewMessages && <View style={styles.redDot} />}  
+                  </View>
+                </TouchableOpacity>
+              )}
+            />
+          ) : (
+            <Text>No ongoing chats yet.</Text>
+          )}
+        </View>
+      )}
     </View>
   );
 };
