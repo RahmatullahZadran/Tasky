@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity } from 'react-native';
 import { firestore, auth } from '../firebase';
 import { Button } from 'react-native-elements';
+import { useNavigation } from '@react-navigation/native'; // Import useNavigation hook
 
 const preAddedPictures = [
   { id: 1, uri: 'https://firebasestorage.googleapis.com/v0/b/tasky-68f96.appspot.com/o/profile.png?alt=media&token=668a8cad-4ab3-4da3-815d-e923f46fb75f' },
@@ -10,7 +11,7 @@ const preAddedPictures = [
   { id: 4, uri: 'https://example.com/profile4.jpg' },
 ];
 
-const ViewProfileScreen = ({ navigation, route }) => {
+const ViewProfileScreen = ({ route }) => {
   const { userId } = route.params;
   const [profilePic, setProfilePic] = useState(null);
   const [username, setUsername] = useState('');
@@ -19,6 +20,8 @@ const ViewProfileScreen = ({ navigation, route }) => {
   const [loading, setLoading] = useState(true);
   const [showPictureOptions, setShowPictureOptions] = useState(false);
   const currentUserId = auth.currentUser?.uid;
+
+  const navigation = useNavigation(); // Use useNavigation hook for the back button
 
   // Fetch the viewed user's profile data from Firestore
   useEffect(() => {
@@ -51,7 +54,6 @@ const ViewProfileScreen = ({ navigation, route }) => {
   // Function to either create a new chat or navigate to an existing chat
   const handleMessage = async () => {
     try {
-      // Check if a chat already exists with exactly these two participants
       const chatQuery = await firestore
         .collection('chats')
         .where('participants', 'array-contains', currentUserId)
@@ -60,7 +62,6 @@ const ViewProfileScreen = ({ navigation, route }) => {
       let chatId;
       let chatFound = false;
 
-      // Check if the chat also contains the selected user
       chatQuery.forEach((doc) => {
         const participants = doc.data().participants;
         if (participants.includes(userId) && participants.includes(currentUserId)) {
@@ -69,7 +70,6 @@ const ViewProfileScreen = ({ navigation, route }) => {
         }
       });
 
-      // If no chat is found, create a new one
       if (!chatFound) {
         const newChatRef = await firestore.collection('chats').add({
           participants: [currentUserId, userId],
@@ -78,13 +78,11 @@ const ViewProfileScreen = ({ navigation, route }) => {
         chatId = newChatRef.id;
       }
 
-      // Update the chat's lastOpened time for the current user
       await firestore.collection('users').doc(currentUserId)
         .collection('chatData')
         .doc(chatId)
         .set({ lastOpened: new Date() }, { merge: true });
 
-      // Navigate to the chat screen
       navigation.navigate('Chat', { chatId, selectedUserId: userId });
 
     } catch (error) {
@@ -102,12 +100,20 @@ const ViewProfileScreen = ({ navigation, route }) => {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
+      {/* Header Section */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={styles.backButton}>Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Profile</Text>
+      </View>
+
       {/* Profile Picture Section */}
       <View style={styles.profileSection}>
         <Image
           source={profilePic
             ? { uri: profilePic }
-            : { uri: 'https://firebasestorage.googleapis.com/v0/b/tasky-68f96.appspot.com/o/profile.png?alt=media&token=668a8cad-4ab3-4da3-815d-e923f46fb75f' }  // Fallback image
+            : { uri: 'https://firebasestorage.googleapis.com/v0/b/tasky-68f96.appspot.com/o/profile.png?alt=media&token=668a8cad-4ab3-4da3-815d-e923f46fb75f' }
           }
           style={styles.profilePic}
         />
@@ -129,8 +135,8 @@ const ViewProfileScreen = ({ navigation, route }) => {
 
       {/* Username and Message Button in the same row */}
       <View style={styles.infoRow}>
-        <Text style={styles.username}>{username}</Text> 
-        <Button title="Message" onPress={handleMessage} buttonStyle={styles.messageButton} /> 
+        <Text style={styles.username}>{username}</Text>
+        <Button title="Message" onPress={handleMessage} buttonStyle={styles.messageButton} />
       </View>
 
       <Text style={styles.label}>Posts</Text>
@@ -152,6 +158,24 @@ const styles = StyleSheet.create({
     padding: 20,
     alignItems: 'center',
     backgroundColor: '#fff',
+  },
+  header: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  backButton: {
+    fontSize: 16,
+    color: '#0288D1',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    flex: 1,
   },
   profileSection: {
     alignItems: 'center',

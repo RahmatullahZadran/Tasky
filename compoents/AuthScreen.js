@@ -3,7 +3,7 @@ import { View, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { Input, Button, Text, CheckBox } from 'react-native-elements';
 import { auth } from '../compoents/firebase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import firebase from 'firebase/compat/app'; // For persistence setting
+import firebase from 'firebase/compat/app'; 
 
 const AuthScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');

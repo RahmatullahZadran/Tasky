@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, TextInput, FlatList, TouchableOpacity } from 'react-native';
 import { firestore, auth } from '../firebase';
 import { Button } from 'react-native-elements';
-import { useFocusEffect } from '@react-navigation/native'; // Import useFocusEffect
+import { useFocusEffect } from '@react-navigation/native';
+import Icon from 'react-native-vector-icons/FontAwesome';
 
 const MessagesScreen = ({ navigation }) => {
   const [searchText, setSearchText] = useState('');
@@ -10,104 +11,91 @@ const MessagesScreen = ({ navigation }) => {
   const [filteredUsers, setFilteredUsers] = useState([]);
   const [chats, setChats] = useState([]);
   const currentUserId = auth.currentUser?.uid;
-  const [usersMap, setUsersMap] = useState({});
-  const [limit, setLimit] = useState(20); // Add limit to avoid fetching too many users/chats
 
-  // Enable Firestore offline persistence
-  useEffect(() => {
-    firestore.enablePersistence().catch(err => {
-      console.error('Failed to enable Firestore persistence:', err);
-    });
-  }, []);
+  // Memoize the usersMap for better performance
+  const usersMap = useMemo(() => {
+    return users.reduce((acc, user) => {
+      acc[user.id] = user.username;
+      return acc;
+    }, {});
+  }, [users]);
 
-  // Fetch all users with a limit
   const fetchUsers = async () => {
     try {
-      const usersCollection = await firestore.collection('users').limit(limit).get();
+      const usersCollection = await firestore.collection('users').get();
       const usersList = usersCollection.docs
-        .filter(doc => doc.id !== currentUserId) // Filter out the current user from the list
+        .filter(doc => doc.id !== currentUserId)
         .map(doc => ({
           id: doc.id,
           ...doc.data(),
         }));
-      const userMap = usersList.reduce((acc, user) => {
-        acc[user.id] = user.username; // Map userId to username
-        return acc;
-      }, {});
       setUsers(usersList);
-      setUsersMap(userMap); // Save the map for faster username lookup
     } catch (error) {
       console.error('Error fetching users:', error);
     }
   };
 
-  // Fetch ongoing chats for the current user with a limit
   const fetchChats = async () => {
     try {
+      // Fetch chats and sort based on the last message's timestamp
       const snapshot = await firestore
         .collection('chats')
         .where('participants', 'array-contains', currentUserId)
-        .limit(limit)
         .get();
 
-      const chatsList = await Promise.all(
-        snapshot.docs.map(async (doc) => {
-          const chatData = doc.data();
-          const otherParticipantId = chatData.participants.find(id => id !== currentUserId); // Get the other participant
-          const otherParticipantUsername = usersMap[otherParticipantId] || 'Unknown User'; // Use the userMap for fast lookup
+      const chatsList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        otherParticipantId: doc.data().participants.find(id => id !== currentUserId),
+      }));
 
-          // Get the last message timestamp
-          const lastMessageSnapshot = await firestore.collection('chats').doc(doc.id)
-            .collection('messages')
-            .orderBy('createdAt', 'desc')
-            .limit(1)
-            .get();
-
-          const lastMessage = lastMessageSnapshot.docs[0]?.data();
-          const lastMessageTime = lastMessage?.createdAt?.toDate();
-
-          // Check if the user has opened the chat and seen the last message
-          const userChatData = await firestore.collection('users').doc(currentUserId)
-            .collection('chatData')
-            .doc(doc.id)
-            .get();
-
-          const lastOpenedTime = userChatData.exists ? userChatData.data().lastOpened?.toDate() : null;
-
-          // Determine if there are new messages
-          const hasNewMessages = lastMessageTime && (!lastOpenedTime || lastMessageTime > lastOpenedTime);
-
-          return {
-            id: doc.id,
-            ...chatData,
-            otherParticipantUsername, // Include the other participant's username
-            hasNewMessages, // Add flag for new messages
-            lastMessageTime, // Include last message time for sorting
-          };
-        })
+      // Fetch all last messages and chat metadata in a single read
+      const lastMessagesPromises = chatsList.map(chat =>
+        firestore.collection('chats').doc(chat.id).collection('messages')
+          .orderBy('createdAt', 'desc').limit(1).get()
       );
 
-      // Sort chats by latest message time, newest at the top
-      const sortedChats = chatsList.sort((a, b) => b.lastMessageTime - a.lastMessageTime);
-      setChats(sortedChats);
+      const chatDataPromises = chatsList.map(chat =>
+        firestore.collection('users').doc(currentUserId)
+          .collection('chatData').doc(chat.id).get()
+      );
+
+      const lastMessages = await Promise.all(lastMessagesPromises);
+      const chatData = await Promise.all(chatDataPromises);
+
+      const enrichedChats = chatsList.map((chat, index) => {
+        const lastMessage = lastMessages[index].docs[0]?.data();
+        const lastMessageTime = lastMessage?.createdAt?.toDate();
+        const userChatData = chatData[index].data();
+        const lastOpenedTime = userChatData?.lastOpened?.toDate();
+
+        const hasNewMessages = lastMessageTime && (!lastOpenedTime || lastMessageTime > lastOpenedTime);
+        return {
+          ...chat,
+          otherParticipantUsername: usersMap[chat.otherParticipantId] || 'Unknown User',
+          lastMessageTime,
+          hasNewMessages,
+        };
+      });
+
+      // Sort chats by last message time
+      setChats(enrichedChats.sort((a, b) => b.lastMessageTime - a.lastMessageTime));
     } catch (error) {
       console.error('Error fetching chats:', error);
     }
   };
 
-  // UseFocusEffect to refresh the chats and users when the screen is focused
   useFocusEffect(
     useCallback(() => {
       const fetchData = async () => {
         await fetchUsers();
         await fetchChats();
       };
-      
+
       fetchData();
     }, [currentUserId, usersMap])
   );
 
-  // Filter users based on search input
   useEffect(() => {
     if (searchText === '') {
       setFilteredUsers([]);
@@ -119,29 +107,22 @@ const MessagesScreen = ({ navigation }) => {
     }
   }, [searchText, users]);
 
-  // Navigate to or create a chat when clicking the "Message" button
   const handleMessage = async (selectedUserId) => {
     try {
-      // Check if a chat already exists with exactly these two participants
       const chatQuery = await firestore
         .collection('chats')
-        .where('participants', 'array-contains', currentUserId) // Find chats where currentUserId is a participant
+        .where('participants', 'array-contains', currentUserId)
         .get();
 
       let chatId;
-      let chatFound = false;
-
-      // Check if the chat also contains the selected user
       chatQuery.forEach((doc) => {
         const participants = doc.data().participants;
-        if (participants.includes(selectedUserId) && participants.includes(currentUserId)) {
+        if (participants.includes(selectedUserId)) {
           chatId = doc.id;
-          chatFound = true;
         }
       });
 
-      // If no chat is found, create a new one
-      if (!chatFound) {
+      if (!chatId) {
         const newChatRef = await firestore.collection('chats').add({
           participants: [currentUserId, selectedUserId],
           createdAt: new Date(),
@@ -149,28 +130,22 @@ const MessagesScreen = ({ navigation }) => {
         chatId = newChatRef.id;
       }
 
-      // Update the chat's lastOpened time for the current user
       await firestore.collection('users').doc(currentUserId)
-        .collection('chatData')
-        .doc(chatId)
+        .collection('chatData').doc(chatId)
         .set({ lastOpened: new Date() }, { merge: true });
 
-      // Navigate to the chat screen
       navigation.navigate('Chat', { chatId, selectedUserId });
-
     } catch (error) {
       console.error('Error creating or navigating to chat:', error);
     }
   };
 
-  // Navigate to user's profile
   const handleViewProfile = (selectedUserId) => {
     navigation.navigate('ViewProfile', { userId: selectedUserId });
   };
 
   return (
     <View style={styles.container}>
-      {/* Search Bar */}
       <TextInput
         style={styles.searchBar}
         placeholder="Search for a user"
@@ -178,7 +153,6 @@ const MessagesScreen = ({ navigation }) => {
         onChangeText={setSearchText}
       />
 
-      {/* User List (only show when there is search input) */}
       {searchText.length > 0 && (
         <FlatList
           data={filteredUsers}
@@ -203,7 +177,6 @@ const MessagesScreen = ({ navigation }) => {
         />
       )}
 
-      {/* Ongoing Chats Section (hidden when searching) */}
       {searchText.length === 0 && (
         <View style={styles.chatsContainer}>
           <Text style={styles.label}>Your Chats</Text>
@@ -213,12 +186,14 @@ const MessagesScreen = ({ navigation }) => {
               keyExtractor={item => item.id}
               renderItem={({ item }) => (
                 <TouchableOpacity
-                  onPress={() => handleMessage(item.participants.find(id => id !== currentUserId))} // Navigate to chat with selected user
+                  onPress={() => handleMessage(item.otherParticipantId)}
                   style={styles.chatItem}
                 >
                   <View style={styles.chatRow}>
                     <Text style={styles.chatTitle}>{item.otherParticipantUsername}</Text>
-                    {item.hasNewMessages && <View style={styles.redDot} />}  
+                    {item.hasNewMessages && (
+                      <Icon name="envelope" size={20} color="red" />
+                    )}
                   </View>
                 </TouchableOpacity>
               )}
@@ -292,12 +267,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-  },
-  redDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: 'red',
   },
 });
 
